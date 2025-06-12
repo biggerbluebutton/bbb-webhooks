@@ -59,6 +59,14 @@ If you are editing these permanent urls after they have already been committed t
  - `redis-cli flushall`
  - **_IMPORTANT:_** Running the above command clears the redis database entirely. This will result in all meetings, processing or not, to be cleared from the database, and may result in broken meetings currently processing.
 
+### Per-hook secret key
+
+When creating a hook with the `/bigbluebutton/api/hooks/create` endpoint you can pass an optional `secret` query parameter. If provided, webhook callbacks for that hook will be signed using this secret instead of the value configured in `bbb.sharedSecret`.
+
+### Override meeting identifier
+
+Hooks created via `/bigbluebutton/api/hooks/create` may also include an `originalMeetingID` query parameter. When present, the `external-meeting-id` field of delivered events will be replaced with this value, allowing you to mask the true external identifier.
+
 ## Manually installing the application on a BBB server
 
 Follow the commands below starting within the `bigbluebutton/bbb-webhooks` directory.

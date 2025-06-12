@@ -388,6 +388,186 @@ export default function suite({
     });
   });
 
+  describe('GET /hooks/create with a per-hook secret', () => {
+    const cbUrl = 'http://127.0.0.1:3015/callback';
+    const customSecret = 'per-hook-secret';
+    let catcher;
+
+    before(async () => {
+      const stale = Hook.get().findByField('callbackURL', cbUrl);
+      if (stale?.id) await Hook.get().removeSubscription(stale.id);
+      catcher = await Helpers.createHooksCatcher(cbUrl);
+    });
+
+    after(async () => {
+      Helpers.stopHooksCatcher(catcher);
+      const hook = Hook.get().findByField('callbackURL', cbUrl);
+      if (hook?.id) await Hook.get().removeSubscription(hook.id);
+    });
+
+    it('should store the secret, omit it from /hooks/list and sign callbacks with it', (done) => {
+      const encodedCb = HooksPostCatcher.encodeForUrl(cbUrl);
+      const createPath = `${Helpers.port}${Helpers.apiPath}create/?callbackURL=${encodedCb}&secret=${encodeURIComponent(customSecret)}`;
+      const createChecksum = Utils.checksumAPI(Helpers.url + createPath, sharedSecret, CHECKSUM_ALGORITHM);
+      const listPath = `${Helpers.port}${Helpers.apiPath}list/`;
+      const listChecksum = Utils.checksumAPI(Helpers.url + listPath, sharedSecret, CHECKSUM_ALGORITHM);
+      // The request URL carries the checksum the hook was signed with
+      const callback = new Promise((resolve) => catcher.once('callback:request', resolve));
+
+      request(Helpers.url)
+        .get(`${createPath}&checksum=${createChecksum}`)
+        .expect('Content-Type', /text\/xml/)
+        .expect(200)
+        .then(() => {
+          const hook = Hook.get().findByField('callbackURL', cbUrl);
+          if (hook?.payload?.secret !== customSecret) {
+            throw new Error(`hook secret not stored. Payload: ${JSON.stringify(hook?.payload)}`);
+          }
+
+          return request(Helpers.url)
+            .get(`${listPath}?checksum=${listChecksum}`)
+            .expect('Content-Type', /text\/xml/)
+            .expect(200);
+        })
+        .then((res) => {
+          const body = res.text || '';
+          if (!body.includes(`<![CDATA[${cbUrl}]]>`)) {
+            throw new Error(`callbackURL missing in list response. Body: ${body}`);
+          }
+          if (body.includes(customSecret)) {
+            throw new Error(`hook secret leaked in list response. Body: ${body}`);
+          }
+
+          redisClient.publish(testChannel, JSON.stringify(Helpers.rawMessage));
+          return callback;
+        })
+        .then(({ url: requestUrl, body }) => {
+          const received = new URL(requestUrl, cbUrl).searchParams.get('checksum');
+          // Mirrors CallbackEmitter._dispatch: the checksum covers the callback
+          // URL, the urlencoded body and the secret the hook was created with
+          const bodyString = new URLSearchParams(body).toString();
+          const algorithm = WH_CONFIG?.hookChecksumAlgorithm || 'sha1';
+          const expected = Utils.shaHex(`${cbUrl}${bodyString}${customSecret}`, algorithm);
+          if (received !== expected) {
+            throw new Error(`callback not signed with the per-hook secret. Got ${received}, expected ${expected}`);
+          }
+        })
+        .then(() => done())
+        .catch(done);
+    });
+  });
+
+  describe('GET /hooks/create with originalMeetingID', () => {
+    const maskedCallbackUrl = 'http://127.0.0.1:3016/callback';
+    const plainCallbackUrl = 'http://127.0.0.1:3017/callback';
+    const originalMeetingID = 'masked-external-meeting-id';
+    const meetingExtId = 'create-with-originalMeetingID-ext-id';
+    const meetingIntId = 'create-with-originalMeetingID-int-id';
+    const meetingCreatedEvent = JSON.parse(JSON.stringify(Helpers.rawMessageMeetingCreated));
+    meetingCreatedEvent.core.body.props.meetingProp.extId = meetingExtId;
+    meetingCreatedEvent.core.body.props.meetingProp.intId = meetingIntId;
+    let maskedCatcher, plainCatcher;
+
+    const createHook = (cbUrl, extraParams = '') => {
+      const createPath = `${Helpers.port}${Helpers.apiPath}create/?callbackURL=${HooksPostCatcher.encodeForUrl(cbUrl)}${extraParams}`;
+      const checksum = Utils.checksumAPI(Helpers.url + createPath, sharedSecret, CHECKSUM_ALGORITHM);
+
+      return request(Helpers.url)
+        .get(`${createPath}&checksum=${checksum}`)
+        .expect('Content-Type', /text\/xml/)
+        .expect(200);
+    };
+
+    const firstCallbackEvent = (catcher) => new Promise((resolve, reject) => {
+      catcher.once('callback', (body) => {
+        try {
+          resolve(JSON.parse(body?.event)[0]);
+        } catch (error) {
+          reject(error);
+        }
+      });
+    });
+
+    before(async () => {
+      for (const cbUrl of [maskedCallbackUrl, plainCallbackUrl]) {
+        const stale = Hook.get().findByField('callbackURL', cbUrl);
+        if (stale?.id) await Hook.get().removeSubscription(stale.id);
+      }
+
+      maskedCatcher = await Helpers.createHooksCatcher(maskedCallbackUrl);
+      plainCatcher = await Helpers.createHooksCatcher(plainCallbackUrl);
+    });
+
+    after(async () => {
+      Helpers.stopHooksCatcher(maskedCatcher);
+      Helpers.stopHooksCatcher(plainCatcher);
+
+      for (const cbUrl of [maskedCallbackUrl, plainCallbackUrl]) {
+        const hook = Hook.get().findByField('callbackURL', cbUrl);
+        if (hook?.id) await Hook.get().removeSubscription(hook.id);
+      }
+    });
+
+    it('should store it, list it and replace external-meeting-id only for that hook', (done) => {
+      const listPath = `${Helpers.port}${Helpers.apiPath}list/`;
+      const listChecksum = Utils.checksumAPI(Helpers.url + listPath, sharedSecret, CHECKSUM_ALGORITHM);
+
+      createHook(maskedCallbackUrl, `&originalMeetingID=${encodeURIComponent(originalMeetingID)}`)
+        .then(() => createHook(plainCallbackUrl))
+        .then(() => {
+          const masked = Hook.get().findByField('callbackURL', maskedCallbackUrl);
+          const plain = Hook.get().findByField('callbackURL', plainCallbackUrl);
+          if (masked?.payload?.originalMeetingID !== originalMeetingID) {
+            throw new Error(`originalMeetingID not stored. Payload: ${JSON.stringify(masked?.payload)}`);
+          }
+          if (plain?.payload?.originalMeetingID != null) {
+            throw new Error(`originalMeetingID set on a hook created without it. Payload: ${JSON.stringify(plain?.payload)}`);
+          }
+
+          return request(Helpers.url)
+            .get(`${listPath}?checksum=${listChecksum}`)
+            .expect('Content-Type', /text\/xml/)
+            .expect(200);
+        })
+        .then((res) => {
+          const body = res.text || '';
+          const tag = `<originalMeetingID><![CDATA[${originalMeetingID}]]></originalMeetingID>`;
+          if (!body.includes(tag)) {
+            throw new Error(`originalMeetingID tag missing in list response. Body: ${body}`);
+          }
+          if (body.split('<originalMeetingID>').length !== 2) {
+            throw new Error(`originalMeetingID tag expected on exactly one hook. Body: ${body}`);
+          }
+
+          const callbacks = Promise.all([
+            firstCallbackEvent(maskedCatcher),
+            firstCallbackEvent(plainCatcher),
+          ]);
+          redisClient.publish(testChannel, JSON.stringify(meetingCreatedEvent));
+
+          return callbacks;
+        })
+        .then(([maskedEvent, plainEvent]) => {
+          const maskedMeeting = maskedEvent?.data?.attributes?.meeting;
+          const plainMeeting = plainEvent?.data?.attributes?.meeting;
+          if (maskedEvent?.data?.id !== 'meeting-created') {
+            throw new Error(`unexpected event for the masked hook: ${JSON.stringify(maskedEvent)}`);
+          }
+          if (maskedMeeting?.['external-meeting-id'] !== originalMeetingID) {
+            throw new Error(`external-meeting-id not replaced for the masked hook. Got: ${JSON.stringify(maskedMeeting)}`);
+          }
+          if (maskedMeeting?.['internal-meeting-id'] !== meetingIntId) {
+            throw new Error(`internal-meeting-id altered for the masked hook. Got: ${JSON.stringify(maskedMeeting)}`);
+          }
+          if (plainMeeting?.['external-meeting-id'] !== meetingExtId) {
+            throw new Error(`external-meeting-id altered for a hook without originalMeetingID. Got: ${JSON.stringify(plainMeeting)}`);
+          }
+        })
+        .then(() => done())
+        .catch(done);
+    });
+  });
+
   describe('delivery to meeting-scoped hooks', () => {
     let scopedHookId, globalHookId;
     let scopedCatcher, globalCatcher;

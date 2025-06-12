@@ -34,6 +34,8 @@ class HookCompartment extends StorageCompartmentKV {
       permanent: payload.permanent === 'true',
       // Should be a boolean
       getRaw: payload.getRaw === 'true',
+      secret: payload.secret,
+      originalMeetingID: payload.originalMeetingID,
     };
 
     return {
@@ -50,6 +52,8 @@ class HookCompartment extends StorageCompartmentKV {
     callbackURL,
     meetingID = null,
     eventID = null,
+    secret = null,
+    originalMeetingID = null,
     permanent = false,
     getRaw = false,
   }) {
@@ -59,6 +63,8 @@ class HookCompartment extends StorageCompartmentKV {
       callbackURL,
       externalMeetingID: meetingID,
       eventID,
+      secret,
+      originalMeetingID,
       permanent,
       getRaw,
     }
@@ -90,6 +96,8 @@ class HookCompartment extends StorageCompartmentKV {
     callbackURL,
     meetingID,
     eventID,
+    secret,
+    originalMeetingID,
     permanent,
     getRaw,
   }) {
@@ -97,6 +105,8 @@ class HookCompartment extends StorageCompartmentKV {
       callbackURL,
       meetingID,
       eventID: eventID?.toLowerCase().split(','),
+      secret,
+      originalMeetingID,
       permanent,
       getRaw,
     });

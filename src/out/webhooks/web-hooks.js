@@ -1,6 +1,7 @@
 import CallbackEmitter from './callback-emitter.js';
 import HookCompartment from '../../db/redis/hooks.js';
 import { METRIC_NAMES } from './metrics.js';
+import config from 'config';
 
 /**
  * WebHooks.
@@ -170,13 +171,22 @@ class WebHooks {
         return;
       }
 
+      let outEvent = event;
+      if (hook.payload.originalMeetingID) {
+        outEvent = config.util.cloneDeep(event);
+        const orig = hook.payload.originalMeetingID;
+        if (outEvent?.data?.attributes?.meeting?.['external-meeting-id'] != null) {
+          outEvent.data.attributes.meeting['external-meeting-id'] = orig;
+        }
+      }
+
       const emitter = new CallbackEmitter(
         hook.payload.callbackURL,
-        event,
+        outEvent,
         hook.payload.permanent,
         this.config.server.domain, {
           permanentIntervalReset: this.config.permanentIntervalReset,
-          secret: this.config.server.secret,
+          secret: hook.payload.secret || this.config.server.secret,
           auth2_0: this.config.server.auth2_0,
           requestTimeout: this.config.requestTimeout,
           retryIntervals: this.config.retryIntervals,
