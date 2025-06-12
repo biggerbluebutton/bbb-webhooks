@@ -3,6 +3,7 @@ import request from 'supertest';
 import config from 'config';
 import Utils from '../../src/out/webhooks/utils.js';
 import Hook from '../../src/db/redis/hooks.js';
+import IDMapping from '../../src/db/redis/id-mapping.js';
 import Helpers from './helpers.js'
 import HooksPostCatcher from './hooks-post-catcher.js';
 
@@ -144,6 +145,98 @@ export default function suite({
           }
         })
     })
+  });
+
+  describe('GET /hooks/create custom secret', () => {
+    const customSecret = 'mysecret';
+    after((done) => {
+      const hooks = Hook.get().getAllGlobalHooks();
+      Hook.get().removeSubscription(hooks[hooks.length-1].id)
+        .then(() => { done(); })
+        .catch(done);
+    });
+
+    it('should store provided secret with the hook', (done) => {
+      let params = Helpers.createUrl + '&secret=' + customSecret;
+      let getUrl = Utils.checksumAPI(
+        Helpers.url + params,
+        sharedSecret,
+        CHECKSUM_ALGORITHM,
+      );
+      const finalUrl = params + '&checksum=' + getUrl;
+
+      request(Helpers.url)
+        .get(finalUrl)
+        .expect('Content-Type', /text\/xml/)
+        .expect(200, () => {
+          const hooks = Hook.get().getAllGlobalHooks();
+          if (hooks && hooks.some((hook) => hook.payload.secret === customSecret)) {
+            done();
+          } else {
+            done(new Error('hook secret not stored'));
+          }
+        });
+    });
+  });
+
+  describe('GET /hooks/create originalMeetingID', () => {
+    const customId = 'orig-123';
+    let catcher;
+
+    before((done) => {
+      catcher = new HooksPostCatcher(Helpers.callback);
+      catcher.start()
+        .then(() => IDMapping.get().addOrUpdateMapping(
+          Helpers.rawMessage.envelope.routing.meetingId,
+          'original-ext'))
+        .then(() => done())
+        .catch(done);
+    });
+
+    after((done) => {
+      catcher.stop();
+      const hooks = Hook.get().getAllGlobalHooks();
+      Hook.get().removeSubscription(hooks[hooks.length-1].id)
+        .then(() => { done(); })
+        .catch(done);
+    });
+
+    it('should use provided originalMeetingID in callbacks', (done) => {
+      let params = Helpers.createUrl + '&originalMeetingID=' + customId;
+      let getUrl = Utils.checksumAPI(
+        Helpers.url + params,
+        sharedSecret,
+        CHECKSUM_ALGORITHM,
+      );
+      const finalUrl = params + '&checksum=' + getUrl;
+
+      request(Helpers.url)
+        .get(finalUrl)
+        .expect('Content-Type', /text\/xml/)
+        .expect(200, () => {
+          const hooks = Hook.get().getAllGlobalHooks();
+          const hook = hooks[hooks.length-1];
+          if (!hook || hook.payload.originalMeetingID !== customId) {
+            done(new Error('hook originalMeetingID not stored'));
+            return;
+          }
+
+          catcher.once('callback', (body) => {
+            try {
+              const parsed = JSON.parse(body.event);
+              if (parsed[0].data.attributes.meeting['external-meeting-id'] === customId) {
+                done();
+              } else {
+                done(new Error('meeting id not replaced'));
+              }
+            } catch (error) {
+              done(error);
+            }
+          });
+
+          redisClient.publish(testChannel, JSON.stringify(Helpers.rawMessage));
+        });
+    });
   });
 
   describe('GET /hooks/create without checksum', () => {
