@@ -70,6 +70,8 @@ export default class API {
     const callbackURL = urlObj.query["callbackURL"];
     const meetingID = urlObj.query["meetingID"];
     const eventID = urlObj.query["eventID"];
+    const secret = urlObj.query["secret"];
+    const originalMeetingID = urlObj.query["originalMeetingID"];
     let getRaw = urlObj.query["getRaw"];
     let returncode = responses.RETURN_CODES.SUCCESS;
     let messageKey;
@@ -90,6 +92,8 @@ export default class API {
           callbackURL,
           meetingID,
           eventID,
+          secret,
+          originalMeetingID,
           permanent: this._isHookPermanent(callbackURL),
           getRaw,
         });
@@ -188,11 +192,13 @@ export default class API {
           callbackURL,
           permanent,
           getRaw,
+          originalMeetingID,
         } = hook.payload;
         msg += "<hook>";
         msg +=   `<hookID>${hook.id}</hookID>`;
         msg +=   `<callbackURL><![CDATA[${callbackURL}]]></callbackURL>`;
         if (!API.storage.get().isGlobal(hook)) { msg +=   `<meetingID><![CDATA[${externalMeetingID}]]></meetingID>`; }
+        if (originalMeetingID != null) { msg +=   `<originalMeetingID><![CDATA[${originalMeetingID}]]></originalMeetingID>`; }
         if (eventID != null) { msg +=   `<eventID>${eventID}</eventID>`; }
         msg +=   `<permanentHook>${permanent}</permanentHook>`;
         msg +=   `<rawData>${getRaw}</rawData>`;
