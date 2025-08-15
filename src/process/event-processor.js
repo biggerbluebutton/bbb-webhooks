@@ -2,6 +2,7 @@ import IDMapping from '../db/redis/id-mapping.js';
 import { newLogger } from '../common/logger.js';
 import WebhooksEvent from '../process/event.js';
 import UserMapping from '../db/redis/user-mapping.js';
+import HookCompartment from '../db/redis/hooks.js';
 import Utils from '../common/utils.js';
 import Metrics from '../metrics/index.js';
 import config from 'config';
@@ -157,6 +158,15 @@ export default class EventProcessor {
       await UserMapping.get().removeMappingWithMeetingId(internalMeetingId);
     } catch (error) {
       Logger.error(`error removing user mappings: ${error}`, {
+        error: error.stack,
+        event,
+      });
+    }
+
+    try {
+      await HookCompartment.get().removeSubscriptionsByMeeting(externalMeetingId);
+    } catch (error) {
+      Logger.error(`error removing meeting hooks: ${error}`, {
         error: error.stack,
         event,
       });

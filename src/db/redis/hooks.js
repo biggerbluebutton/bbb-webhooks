@@ -146,6 +146,23 @@ class HookCompartment extends StorageCompartmentKV {
     return Promise.resolve(false);
   }
 
+  async removeSubscriptionsByMeeting(externalMeetingID) {
+    const hooks = this.findAllWithField('externalMeetingID', externalMeetingID);
+
+    if (!hooks || hooks.length === 0) return Promise.resolve([]);
+
+    return Promise.all(
+      hooks.map((hook) => {
+        if (hook?.payload?.permanent) return Promise.resolve(false);
+
+        this.logger.info(
+          `removing the hook with callback URL: [${hook.payload.callbackURL}], for the meeting: [${externalMeetingID}]`
+        );
+        return this.destroy(hook.id);
+      }),
+    );
+  }
+
   countSync() {
     return this.count();
   }
